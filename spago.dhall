@@ -6,8 +6,8 @@ You can edit this file as you like.
 , dependencies =
   [ "aff"
   , "arrays"
-  , "console"
   , "control"
+  , "debug"
   , "effect"
   , "either"
   , "exceptions"
@@ -17,11 +17,13 @@ You can edit this file as you like.
   , "integers"
   , "maybe"
   , "parsing"
+  , "partial"
   , "prelude"
   , "psci-support"
   , "strings"
   , "transformers"
   , "tuples"
+  , "unordered-collections"
   , "web-dom"
   , "web-html"
   ]

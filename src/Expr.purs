@@ -1,7 +1,6 @@
 module Expr (Expr(..), parseExpr, showExprPrec) where
 
 import Prelude hiding (between)
-
 import Control.Alternative ((<|>))
 import Control.Lazy (fix)
 import Data.Array (cons, many, some)
@@ -30,9 +29,13 @@ parensPrec n m s
 
 showExprPrec :: Int -> Expr -> String
 showExprPrec _ (Var s) = s
+
 showExprPrec _ (Lit i) = show i
+
 showExprPrec p (App f a) = parensPrec p 1 (showExprPrec 1 f <> " " <> showExprPrec 2 a)
+
 showExprPrec p (Abs v e) = parensPrec p 0 ("λ" <> v <> ". " <> showExprPrec 0 e)
+
 showExprPrec p (CallCC f) = parensPrec p 1 ("call/cc " <> showExprPrec 2 f)
 
 instance showExpr :: Show Expr where
@@ -72,7 +75,7 @@ expr =
       <$> (symbol "\\" *> ident)
       <*> (symbol "." *> p)
       <|> between (symbol "(") (symbol ")") p
-      
+
 parseExpr :: String -> Either String Expr
 parseExpr s = case runParser s (whiteSpace *> expr <* eof) of
   Left e -> Left (parseErrorMessage e)

@@ -16,7 +16,7 @@ exports.setupZoom = function(svg) {
 }
 
 exports.renderGraph = function(svg, graph) {
-    var g = new dagre.graphlib.Graph().setGraph({});
+    var g = new dagre.graphlib.Graph({multigraph: true}).setGraph({});
 
     for (var i = 0; i < graph.length; i++) {
         const def = graph[i];
@@ -31,7 +31,8 @@ exports.renderGraph = function(svg, graph) {
         if (def instanceof Dagre_Types.Node) {
             g.setNode(def.value0, props);
         } else if (def instanceof Dagre_Types.Edge) {
-            g.setEdge(def.value0, def.value1, props);
+            const l = attrs.label instanceof Data_Maybe.Just ? props.label : "";
+            g.setEdge(def.value0, def.value1, props, "" + def.value0 + "," + def.value1 + l);
         }
     }
     
@@ -39,7 +40,7 @@ exports.renderGraph = function(svg, graph) {
     var inner = el.select("g");
 
     g.graph().transition = function(selection) {
-        return selection.transition().duration(100);
+        return selection.transition().duration(500);
     };
     
     inner.call(render, g);
