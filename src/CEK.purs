@@ -36,11 +36,6 @@ instance showValue :: Show Value where
   show (VPrim name _ env) = "#" <> name
   show (VCont cont) = show cont
 
--- showEnv :: Boolean -> Env -> String
--- showEnv nls env =
---   joinWith (if nls then "\n" else "; ") (map showMapping env)
---   where
---     showMapping (Tuple var expr) = var <> " → " <> show expr
 data Frame
   = Hole -- □
   | HoleFunc Expr Env Addr -- □ expr
@@ -57,7 +52,7 @@ type Heap = HashMap Addr Value
 
 data CEK
   = CEK
-    { code :: Either Value Expr
+    { code :: Either Addr Expr
     , env :: Env
     , cont :: Addr
     , state :: Heap
@@ -113,29 +108,30 @@ doneCheck (CEK cek) =
       Just (VCont Hole) -> true
       _ -> false
 
-lookupEnv :: Env -> String -> Interp Value
+lookupEnv :: Env -> String -> Interp Addr
 lookupEnv env x = case lookup x env of
   Nothing -> case DF.lookup x prims of
     Nothing -> throwError ("Variable not bound: " <> x)
-    Just prim -> pure prim
-  Just a -> lookupAddr a
+    Just prim -> alloc prim
+  Just a -> pure a
 
 stepCEK :: Interp Unit
 stepCEK = do
   CEK cek <- get
   case cek.code of
-    Left val -> alloc val >>= plugFrame
+    Left val -> plugFrame val
     Right (Var x) -> do
        v <- lookupEnv cek.env x
        modify_ \(CEK c) -> CEK (c { code = Left v })
     Right (Lit x) -> do
-      modify_ \(CEK c) -> CEK (c { code = Left (VInt x) })
+      r <- alloc (VInt x)
+      modify_ \(CEK c) -> CEK (c { code = Left r})
       alloc (VInt x) >>= plugFrame
     Right (App f x) -> do
       newcont <- alloc (VCont (HoleFunc x cek.env cek.cont))
       modify_ \(CEK c) -> CEK (c { code = Right f, cont = newcont })
     Right (Abs var body) -> do
-      let clos = VClos var body cek.env
+      clos <- alloc (VClos var body cek.env)
       modify_ \(CEK c) -> (CEK c { code = Left clos })
     Right (CallCC expr) -> do
       newcont <- alloc (VCont (HoleFuncOnly cek.cont cek.cont))
@@ -165,10 +161,11 @@ applyFunc addr funcAddr cont = do
       if length args + 1 == arity
       then do
         args' <- traverse lookupAddr (snoc args addr)
-        r <- runPrim name args'
+        r <- runPrim name args' >>= alloc
         modify_ \(CEK c) -> CEK (c { code = Left r, cont = cont })
       else do
-        modify_ \(CEK c) -> CEK (c { code = Left (VPrim name arity (snoc args addr)), cont = cont })
+        r <- alloc (VPrim name arity (snoc args addr))
+        modify_ \(CEK c) -> CEK (c { code = Left r, cont = cont })
     VCont _ -> do
       modify_ \(CEK c) -> CEK (c { cont = funcAddr })
     _ -> throwError "Tried to apply an argument to something that isn't a function, primitive, or continuation"
@@ -179,7 +176,7 @@ runPrim "add" _ = throwError "'add' expects two integer arguments"
 runPrim _ _ = throwError "unknown primitive"
 
 prims :: Array (Tuple String Value)
-prims = [ Tuple "add" (VPrim "add" 2 []) ]
+prims = [ Tuple "add" (VPrim "add" 2 [])]
 
 type GCState = { roots :: Array Addr, newheap :: Heap, oldheap :: Heap }
 
@@ -211,5 +208,5 @@ garbageCollect = do
     go s@{roots: []} = s.newheap
     go s = go (copyLive s)
 
-    initialRoots {code: Left val, env, cont} = valRoots val <> values env <> [cont]
+    initialRoots {code: Left addr, env, cont} = [addr] <> values env <> [cont]
     initialRoots {env, cont} = values env <> [cont]

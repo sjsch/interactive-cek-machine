@@ -1,15 +1,19 @@
 module Main where
 
+
 import CEK (Addr, CEK(..), Env, Frame(..), Value(..), doneCheck, runStep, startState)
+import Control.Bind ((>>=))
 import Control.Category (identity)
-import Control.Monad.Error.Class (throwError)
-import Dagre (Def(..), Graph, CommonAttr, dagre, defAttr)
+import Dagre (CommonAttr, Def(..), Graph, dagre, defAttr)
+import Data.Array (mapMaybe)
 import Data.Either (Either(..))
+import Data.Foldable (traverse_)
 import Data.FoldableWithIndex (foldMapWithIndex)
 import Data.HashMap (HashMap)
-import Data.Maybe (Maybe(..), isJust, maybe)
+import Data.Maybe (Maybe(..), maybe)
 import Effect (Effect)
-import Effect.Aff (Aff, error)
+import Effect.Aff (Aff)
+import Effect.Class (liftEffect)
 import Expr (parseExpr)
 import Halogen (ClassName(..))
 import Halogen as H
@@ -21,15 +25,23 @@ import Halogen.HTML.Properties (class_, disabled)
 import Halogen.VDom.Driver (runUI)
 import Prelude (Unit, Void, bind, const, discard, join, not, pure, show, unit, ($), (<>), negate)
 import Type.Proxy (Proxy(..))
-import Web.DOM.ParentNode (QuerySelector(..))
+import Web.DOM.NodeList as NL
+import Web.DOM.ParentNode (QuerySelector(..), querySelectorAll)
+import Web.HTML (window)
+import Web.HTML.HTMLDocument (toParentNode)
+import Web.HTML.HTMLElement as HTMLElement
+import Web.HTML.Window (document)
 
 main :: Effect Unit
 main = do
   HA.runHalogenAff do
     HA.awaitLoad
-    appBody' <- HA.selectElement (QuerySelector "#app")
-    appBody <- maybe (throwError (error "Could not find app body")) pure appBody'
-    runUI component unit appBody
+    nodes <- liftEffect do
+      doc <- window >>= document
+      nodes <- querySelectorAll (QuerySelector ".cek-machine") (toParentNode doc)
+      nodesArray <- NL.toArray nodes
+      pure $ mapMaybe HTMLElement.fromNode nodesArray
+    traverse_ (runUI component unit) nodes
 
 data Action
   = ActionProgram String
@@ -60,7 +72,7 @@ component =
         [ HH.input [ HE.onValueInput ActionProgram ]
         , HH.button
           [ onClick (const ActionStep)
-          , disabled (not (isJust state.cek))
+          , disabled (not (validAndNotDone state.cek))
           ]
           [HH.text "Step"]
         ]
@@ -93,6 +105,9 @@ component =
             else case runStep cek of
               Left err -> state { errors = Just err }
               Right cek' -> state { cek = Just cek' }
+
+  validAndNotDone Nothing = false
+  validAndNotDone (Just s) = not (doneCheck s)
  
 cekToGraph :: CEK -> Graph Int
 cekToGraph (CEK cek) =
@@ -102,7 +117,10 @@ cekToGraph (CEK cek) =
   <> heapToGraph cek.state
 
   where
-    showCode (Left x) = valToGraph (_ { cssClass = Just "ccont" }) (-1) x
+    showCode (Left x) =
+      [ Node (-1) defAttr { label = Just "value", cssClass = Just "ccont" }
+      , Edge (-1) x defAttr { label = Just "value" }
+      ]
     showCode (Right x) = [ Node (-1) defAttr { label = Just (show x), cssClass = Just "ccont" } ]
 
 heapToGraph :: HashMap Addr Value -> Graph Int
@@ -130,33 +148,3 @@ valLinks addr (VPrim _ _ env) =
 
 envToLinks :: Addr -> Env -> Graph Int
 envToLinks addr env = foldMapWithIndex (\k a -> [ Edge addr a defAttr { label = Just k } ]) env
-
--- cekToGraph :: CEK -> Graph Int
--- cekToGraph (CEK code env cont) =
---   let depth = frameDepth cont
---   in
---    [ Node depth defAttr {label = Just (showCode code <> "\n" <> showEnv true env)}
---    ]
---   <> frameToGraph depth (depth - 1) cont
-
---    where
---      showCode (Left val) = show val
---      showCode (Right expr) = show expr
-
--- frameDepth :: Frame -> Int
--- frameDepth Hole = 1
--- frameDepth (HoleFunc _ _ c) = 1 + frameDepth c
--- frameDepth (HoleArg _ c) = 1 + frameDepth c
-
--- frameToGraph :: Int -> Int -> Frame -> Graph Int
--- frameToGraph _ _ Hole = []
--- frameToGraph prev n (HoleFunc arg env cont) =
---   [ Node n defAttr {label = Just ("○ " <> showExprPrec 2 arg <> "\n" <> showEnv true env)}
---   , Edge prev n defAttr
---   ]
---   <> frameToGraph n (n - 1) cont
--- frameToGraph prev n (HoleArg func cont) =
---   [ Node n defAttr {label = Just ("(" <> show func <> ") ○")}
---   , Edge prev n defAttr
---   ]
---   <> frameToGraph n (n - 1) cont
