@@ -1,16 +1,17 @@
 module Expr (Expr(..), parseExpr, showExprPrec) where
 
 import Prelude hiding (between)
-import Control.Alternative ((<|>))
+
+import Control.Alternative (guard, (<|>))
 import Control.Lazy (fix)
-import Data.Array (cons, many, some)
+import Data.Array (cons, many, notElem, some)
 import Data.Either (Either(..))
 import Data.Identity (Identity)
 import Data.Int (fromString)
 import Data.Maybe (Maybe(..))
 import Data.String.CodeUnits (fromCharArray)
 import Text.Parsing.Parser (ParserT, fail, parseErrorMessage, runParser)
-import Text.Parsing.Parser.Combinators (between)
+import Text.Parsing.Parser.Combinators (between, try)
 import Text.Parsing.Parser.Expr (Assoc(..), Operator(..), buildExprParser)
 import Text.Parsing.Parser.String (eof, string, whiteSpace)
 import Text.Parsing.Parser.Token (alphaNum, digit, letter)
@@ -18,6 +19,8 @@ import Text.Parsing.Parser.Token (alphaNum, digit, letter)
 data Expr
   = Var String
   | Lit Int
+  | LitB Boolean
+  | If Expr Expr Expr
   | App Expr Expr
   | Abs String Expr
   | CallCC Expr
@@ -31,6 +34,10 @@ showExprPrec :: Int -> Expr -> String
 showExprPrec _ (Var s) = s
 
 showExprPrec _ (Lit i) = show i
+
+showExprPrec _ (LitB b) = show b
+
+showExprPrec _ (If c t f) = "if " <> showExprPrec 0 c <> " then " <> showExprPrec 0 t <> " else " <> showExprPrec 0 f
 
 showExprPrec p (App f a) = parensPrec p 1 (showExprPrec 1 f <> " " <> showExprPrec 2 a)
 
@@ -51,7 +58,10 @@ lexeme :: forall a. Parser a -> Parser a
 lexeme p = p <* whiteSpace
 
 ident :: Parser String
-ident = lexeme (map fromCharArray (cons <$> letter <*> many alphaNum))
+ident = lexeme $ do
+  x <- map fromCharArray (cons <$> letter <*> many alphaNum)
+  guard (x `notElem` ["if", "then", "else", "true", "false"])
+  pure x
 
 literalInt :: Parser Expr
 literalInt = do
@@ -60,20 +70,32 @@ literalInt = do
     Nothing -> fail "Expected an integer"
     Just x -> pure (Lit x)
 
+literalBool :: Parser Expr
+literalBool = (LitB true <$ symbol "true") <|> (LitB false <$ symbol "false")
+
 expr :: Parser Expr
 expr =
   fix \p ->
     buildExprParser
-      [ [ Infix (pure App) AssocLeft, Prefix (symbol "call/cc " $> CallCC) ] ]
+      [ [ Infix (pure App) AssocLeft, Prefix (symbol "call/cc" $> CallCC) ] ]
       (atom p)
   where
   atom p =
     lexeme
-      $ map Var ident
+      $ do
+          symbol "if"
+          c <- p
+          symbol "then"
+          t <- p
+          symbol "else"
+          f <- p
+          pure (If c t f)
       <|> literalInt
+      <|> literalBool
       <|> Abs
       <$> (symbol "\\" *> ident)
       <*> (symbol "." *> p)
+      <|> try (map Var ident)
       <|> between (symbol "(") (symbol ")") p
 
 parseExpr :: String -> Either String Expr

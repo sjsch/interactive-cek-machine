@@ -1,11 +1,11 @@
 module CEK where
 
-import Control.Bind ((>>=))
 import Control.Monad.Error.Class (throwError)
 import Control.Monad.Except (Except, runExcept)
 import Control.Monad.State (StateT, get, put, runStateT, modify_)
 import Data.Array (delete, length, snoc)
 import Data.Boolean (otherwise)
+import Data.CommutativeRing ((*))
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
 import Data.Foldable as DF
@@ -26,29 +26,36 @@ type Env
 
 data Value
   = VInt Int
+  | VBool Boolean
   | VClos String Expr Env
   | VPrim String Int (Array Addr)
   | VCont Frame
+  | VPair Addr Addr
 
 instance showValue :: Show Value where
   show (VInt n) = show n
+  show (VBool b) = show b
   show (VClos var expr env) = "#λ" <> var <> ". " <> show expr
   show (VPrim name _ env) = "#" <> name
   show (VCont cont) = show cont
+  show (VPair l r) = "pair l r"
 
 data Frame
   = Hole -- □
   | HoleFunc Expr Env Addr -- □ expr
   | HoleArg Addr Addr -- value □
-  | HoleFuncOnly Addr Addr
+  | HoleFuncOnly Addr Addr -- □ value
+  | HoleIf Expr Expr Env Addr -- if □ then expr else expr
 
 instance showFrame :: Show Frame where
   show Hole = "□"
   show (HoleFunc arg _ _) = "□ " <> showExprPrec 2 arg
   show (HoleFuncOnly func _) = "□ arg"
   show (HoleArg func _) = "func □"
+  show (HoleIf t f _ _) = "if □ then " <> showExprPrec 0 t <> " else " <> showExprPrec 0 f
 
-type Heap = HashMap Addr Value
+type Heap
+  = HashMap Addr Value
 
 data CEK
   = CEK
@@ -78,7 +85,6 @@ gensym = do
   put (CEK (s { newsym = s.newsym + 1 }))
   pure (s.newsym)
 
-  
 alloc :: Value -> Interp Addr
 alloc v = do
   addr <- gensym
@@ -99,14 +105,13 @@ runStep s = runExcept (map snd (runStateT doStep s))
     stepCEK
     garbageCollect
     get
-    
+
 doneCheck :: CEK -> Boolean
-doneCheck (CEK cek) =
-  case cek.code of
-    Right _ -> false
-    Left _ -> case lookup cek.cont cek.state of
-      Just (VCont Hole) -> true
-      _ -> false
+doneCheck (CEK cek) = case cek.code of
+  Right _ -> false
+  Left _ -> case lookup cek.cont cek.state of
+    Just (VCont Hole) -> true
+    _ -> false
 
 lookupEnv :: Env -> String -> Interp Addr
 lookupEnv env x = case lookup x env of
@@ -121,12 +126,16 @@ stepCEK = do
   case cek.code of
     Left val -> plugFrame val
     Right (Var x) -> do
-       v <- lookupEnv cek.env x
-       modify_ \(CEK c) -> CEK (c { code = Left v })
+      v <- lookupEnv cek.env x
+      modify_ \(CEK c) -> CEK (c { code = Left v })
     Right (Lit x) -> do
       r <- alloc (VInt x)
-      modify_ \(CEK c) -> CEK (c { code = Left r})
-      alloc (VInt x) >>= plugFrame
+      modify_ \(CEK c) -> CEK (c { code = Left r })
+      plugFrame r
+    Right (LitB x) -> do
+      r <- alloc (VBool x)
+      modify_ \(CEK c) -> CEK (c { code = Left r })
+      plugFrame r
     Right (App f x) -> do
       newcont <- alloc (VCont (HoleFunc x cek.env cek.cont))
       modify_ \(CEK c) -> CEK (c { code = Right f, cont = newcont })
@@ -136,6 +145,9 @@ stepCEK = do
     Right (CallCC expr) -> do
       newcont <- alloc (VCont (HoleFuncOnly cek.cont cek.cont))
       modify_ \(CEK c) -> CEK (c { code = Right expr, cont = newcont })
+    Right (If cond t f) -> do
+      newcont <- alloc (VCont (HoleIf t f cek.env cek.cont))
+      modify_ \(CEK c) -> CEK (c { code = Right cond, cont = newcont })
 
 plugFrame :: Addr -> Interp Unit
 plugFrame addr = do
@@ -149,19 +161,24 @@ plugFrame addr = do
       modify_ \(CEK c) -> CEK (c { code = Right arg, env = env, cont = newcont })
     Just (VCont (HoleFuncOnly arg cont)) -> applyFunc arg addr cont
     Just (VCont (HoleArg funcAddr cont)) -> applyFunc addr funcAddr cont
-    Just jjj -> unsafeCrashWith ("Not a continuation" <> show jjj)
+    Just (VCont (HoleIf t f env cont)) -> case lookup addr cek.state of
+      Nothing -> unsafeCrashWith "Invalid address"
+      Just (VBool b) -> do
+        let
+          x = if b then t else f
+        modify_ \(CEK c) -> CEK (c { code = Right x, env = env, cont = cont })
+      Just _ -> throwError "Tried to use if on a non-boolean"
+    Just x -> unsafeCrashWith ("Not a continuation" <> show x)
 
 applyFunc :: Addr -> Addr -> Addr -> Interp Unit
 applyFunc addr funcAddr cont = do
   func <- lookupAddr funcAddr
   case func of
-    VClos var body env ->
-      modify_ \(CEK c) -> CEK (c { code = Right body, env = insert var addr env, cont = cont })
-    VPrim name arity args -> 
-      if length args + 1 == arity
-      then do
+    VClos var body env -> modify_ \(CEK c) -> CEK (c { code = Right body, env = insert var addr env, cont = cont })
+    VPrim name arity args ->
+      if length args + 1 == arity then do
         args' <- traverse lookupAddr (snoc args addr)
-        r <- runPrim name args' >>= alloc
+        r <- runPrim name (snoc args addr) args'
         modify_ \(CEK c) -> CEK (c { code = Left r, cont = cont })
       else do
         r <- alloc (VPrim name arity (snoc args addr))
@@ -170,43 +187,86 @@ applyFunc addr funcAddr cont = do
       modify_ \(CEK c) -> CEK (c { cont = funcAddr })
     _ -> throwError "Tried to apply an argument to something that isn't a function, primitive, or continuation"
 
-runPrim :: String -> Array Value -> Interp Value
-runPrim "add" [VInt n, VInt m] = pure (VInt (n + m))
-runPrim "add" _ = throwError "'add' expects two integer arguments"
-runPrim _ _ = throwError "unknown primitive"
+runPrim :: String -> Array Addr -> Array Value -> Interp Addr
+runPrim "add" _ [ VInt n, VInt m ] = alloc (VInt (n + m))
+
+runPrim "add" _ _ = throwError "'add' expects two integer arguments"
+
+runPrim "mul" _ [ VInt n, VInt m ] = alloc (VInt (n * m))
+
+runPrim "mul" _ _ = throwError "'mul' expects two integer arguments"
+
+runPrim "eq" _ [ VInt n, VInt m ] = alloc (VBool (n == m))
+
+runPrim "eq" _ _ = throwError "'eq' expects two integer arguments"
+
+runPrim "pair" [ l, r ] _ = alloc (VPair l r)
+
+runPrim "pair" _ _ = throwError "'pair' expects two arguments"
+
+runPrim "fst" _ [ VPair l _ ] = pure l
+
+runPrim "fst" _ _ = throwError "'fst' expects a pair argument"
+
+runPrim "snd" _ [ VPair _ r ] = pure r
+
+runPrim "snd" _ _ = throwError "'snd' expects a pair argument"
+
+runPrim _ _ _ = throwError "unknown primitive"
 
 prims :: Array (Tuple String Value)
-prims = [ Tuple "add" (VPrim "add" 2 [])]
+prims = [ Tuple "add" (VPrim "add" 2 [])
+        , Tuple "mul" (VPrim "mul" 2 [])
+        , Tuple "eq" (VPrim "eq" 2 [])
+        , Tuple "pair" (VPrim "pair" 2 [])
+        , Tuple "fst" (VPrim "fst" 1 [])
+        , Tuple "snd" (VPrim "snd" 1 [])
+        ]
 
-type GCState = { roots :: Array Addr, newheap :: Heap, oldheap :: Heap }
+type GCState
+  = { roots :: Array Addr, newheap :: Heap, oldheap :: Heap }
 
 valRoots :: Value -> Array Addr
 valRoots (VInt _) = []
+
+valRoots (VBool _) = []
+
+valRoots (VPair l r) = [l, r]
+
 valRoots (VClos _ _ env) = values env
+
 valRoots (VPrim _ _ env) = env
+
 valRoots (VCont Hole) = []
-valRoots (VCont (HoleArg func cont)) = [func, cont]
+
+valRoots (VCont (HoleArg func cont)) = [ func, cont ]
+
 valRoots (VCont (HoleFunc _ env cont)) = snoc (values env) cont
-valRoots (VCont (HoleFuncOnly arg cont)) = [arg, cont]
+
+valRoots (VCont (HoleFuncOnly arg cont)) = [ arg, cont ]
+
+valRoots (VCont (HoleIf _ _ env cont)) = snoc (values env) cont
 
 copyLive :: GCState -> GCState
 copyLive state = foldl copyRoot state state.roots
   where
-    copyRoot s root
-      | member root s.newheap = s { roots = delete root s.roots }
-      | otherwise =
-        case lookup root s.oldheap of
-          Nothing -> unsafeCrashWith "Address went nowhere"
-          Just val -> s { newheap = insert root val s.newheap, roots = s.roots <> valRoots val }
+  copyRoot s root
+    | member root s.newheap = s { roots = delete root s.roots }
+    | otherwise = case lookup root s.oldheap of
+      Nothing -> unsafeCrashWith "Address went nowhere"
+      Just val -> s { newheap = insert root val s.newheap, roots = s.roots <> valRoots val }
 
 garbageCollect :: Interp Unit
 garbageCollect = do
   CEK cek <- get
-  let newheap = go { roots: initialRoots cek, newheap: empty, oldheap: cek.state }
+  let
+    newheap = go { roots: initialRoots cek, newheap: empty, oldheap: cek.state }
   put (CEK (cek { state = newheap }))
   where
-    go s@{roots: []} = s.newheap
-    go s = go (copyLive s)
+  go s@{ roots: [] } = s.newheap
 
-    initialRoots {code: Left addr, env, cont} = [addr] <> values env <> [cont]
-    initialRoots {env, cont} = values env <> [cont]
+  go s = go (copyLive s)
+
+  initialRoots { code: Left addr, cont } = [ addr, cont ]
+
+  initialRoots { env, cont } = values env <> [ cont ]

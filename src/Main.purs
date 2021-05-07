@@ -1,6 +1,5 @@
 module Main where
 
-
 import CEK (Addr, CEK(..), Env, Frame(..), Value(..), doneCheck, runStep, startState)
 import Control.Bind ((>>=))
 import Control.Category (identity)
@@ -36,23 +35,25 @@ main :: Effect Unit
 main = do
   HA.runHalogenAff do
     HA.awaitLoad
-    nodes <- liftEffect do
-      doc <- window >>= document
-      nodes <- querySelectorAll (QuerySelector ".cek-machine") (toParentNode doc)
-      nodesArray <- NL.toArray nodes
-      pure $ mapMaybe HTMLElement.fromNode nodesArray
+    nodes <-
+      liftEffect do
+        doc <- window >>= document
+        nodes <- querySelectorAll (QuerySelector ".cek-machine") (toParentNode doc)
+        nodesArray <- NL.toArray nodes
+        pure $ mapMaybe HTMLElement.fromNode nodesArray
     traverse_ (runUI component unit) nodes
 
 data Action
   = ActionProgram String
   | ActionStep
 
-type Slots = ( graph :: forall q. H.Slot q Void Unit )
+type Slots
+  = ( graph :: forall q. H.Slot q Void Unit )
 
-type State =
-  { errors :: Maybe String
-  , cek :: Maybe CEK
-  }
+type State
+  = { errors :: Maybe String
+    , cek :: Maybe CEK
+    }
 
 _graph = Proxy :: Proxy "graph"
 
@@ -67,61 +68,62 @@ component =
   initialState _ = { errors: Nothing, cek: Nothing }
 
   render state =
-    HH.div_ $ join
-      [ pure $ HH.div [ class_ (ClassName "inputbar") ]
-        [ HH.input [ HE.onValueInput ActionProgram ]
-        , HH.button
-          [ onClick (const ActionStep)
-          , disabled (not (validAndNotDone state.cek))
+    HH.div_
+      $ join
+          [ pure
+              $ HH.div [ class_ (ClassName "inputbar") ]
+                  [ HH.input [ HE.onValueInput ActionProgram ]
+                  , HH.button
+                      [ onClick (const ActionStep)
+                      , disabled (not (validAndNotDone state.cek))
+                      ]
+                      [ HH.text "Step" ]
+                  ]
+          , do
+              errs <- maybe [] (\x -> [ x ]) state.errors
+              pure $ HH.div [ class_ (ClassName "errors") ] [ HH.text errs ]
+          , do
+              cek <- maybe [] (\x -> [ x ]) state.cek
+              pure $ HH.slot_ _graph unit dagre (cekToGraph cek)
           ]
-          [HH.text "Step"]
-        ]
-      , do
-           errs <- maybe [] (\x -> [x]) state.errors
-           pure $ HH.div [ class_ (ClassName "errors") ] [ HH.text errs ]
-      , do
-           cek <- maybe [] (\x -> [x]) state.cek
-           pure $ HH.slot_ _graph unit dagre (cekToGraph cek)
-      ]
 
   handleAction = case _ of
-    ActionProgram "" ->
-      H.put { errors: Nothing, cek: Nothing }
-
-    ActionProgram p ->
-      case parseExpr p of
-        Left err -> H.modify_ (_ { errors = Just err })
-        Right code -> H.put
-                      { errors: Nothing
-                      , cek: Just (startState code)
-                      }
-    
-    ActionStep -> H.modify_ \state ->
-      case state.cek of
+    ActionProgram "" -> H.put { errors: Nothing, cek: Nothing }
+    ActionProgram p -> case parseExpr p of
+      Left err -> H.modify_ (_ { errors = Just err })
+      Right code ->
+        H.put
+          { errors: Nothing
+          , cek: Just (startState code)
+          }
+    ActionStep ->
+      H.modify_ \state -> case state.cek of
         Nothing -> state
         Just cek -> do
-          if doneCheck cek
-            then state
-            else case runStep cek of
-              Left err -> state { errors = Just err }
-              Right cek' -> state { cek = Just cek' }
+          if doneCheck cek then
+            state
+          else case runStep cek of
+            Left err -> state { errors = Just err }
+            Right cek' -> state { cek = Just cek' }
 
   validAndNotDone Nothing = false
+
   validAndNotDone (Just s) = not (doneCheck s)
- 
+
 cekToGraph :: CEK -> Graph Int
 cekToGraph (CEK cek) =
   showCode cek.code
-  <> envToLinks (-1) cek.env
-  <> [ Edge (-1) cek.cont defAttr { label = Just "cont" } ]
-  <> heapToGraph cek.state
-
+    <> [ Edge (-1) cek.cont defAttr { label = Just "cont" } ]
+    <> heapToGraph cek.state
   where
-    showCode (Left x) =
-      [ Node (-1) defAttr { label = Just "value", cssClass = Just "ccont" }
-      , Edge (-1) x defAttr { label = Just "value" }
-      ]
-    showCode (Right x) = [ Node (-1) defAttr { label = Just (show x), cssClass = Just "ccont" } ]
+  showCode (Left x) =
+    [ Node (-1) defAttr { label = Just "value", cssClass = Just "ccont" }
+    , Edge (-1) x defAttr { label = Just "value" }
+    ]
+
+  showCode (Right x) =
+    [ Node (-1) defAttr { label = Just (show x), cssClass = Just "ccont" } ]
+      <> envToLinks (-1) cek.env
 
 heapToGraph :: HashMap Addr Value -> Graph Int
 heapToGraph graph = foldMapWithIndex (valToGraph identity) graph
@@ -129,22 +131,34 @@ heapToGraph graph = foldMapWithIndex (valToGraph identity) graph
 valToGraph :: (CommonAttr -> CommonAttr) -> Addr -> Value -> Graph Int
 valToGraph attr addr val = [ Node addr (attr { label: Just (show val), cssClass: cssClass val }) ] <> valLinks addr val
   where
-    cssClass (VCont _) = Just "cont"
-    cssClass _ = Nothing
+  cssClass (VCont _) = Just "cont"
+
+  cssClass _ = Nothing
 
 valLinks :: Addr -> Value -> Graph Int
 valLinks _ (VInt _) = []
-valLinks addr (VClos _ _ env) =
-  envToLinks addr env
+
+valLinks _ (VBool _) = []
+
+valLinks a (VPair l r) =
+  [ Edge a l defAttr { label = Just "l" }
+  , Edge a r defAttr { label = Just "r" }
+  ]
+
+valLinks addr (VClos _ _ env) = envToLinks addr env
+
 valLinks addr (VCont cont) =
-  let f a = [ Edge addr a defAttr { label = Just "cont", cssClass = Just "cont" } ]
-  in case cont of
-    Hole -> []
-    HoleArg x a -> f a <> [ Edge addr x defAttr { label = Just "func" } ]
-    HoleFunc _ _ a -> f a
-    HoleFuncOnly x a -> f a <> [ Edge addr x defAttr { label = Just "arg" } ]
-valLinks addr (VPrim _ _ env) =
-  foldMapWithIndex (\k a -> [ Edge addr a defAttr { label = Just (show k) } ]) env
+  let
+    f a = [ Edge addr a defAttr { label = Just "cont", cssClass = Just "cont" } ]
+  in
+    case cont of
+      Hole -> []
+      HoleArg x a -> f a <> [ Edge addr x defAttr { label = Just "func" } ]
+      HoleFunc _ env a -> f a <> envToLinks addr env
+      HoleFuncOnly x a -> f a <> [ Edge addr x defAttr { label = Just "arg" } ]
+      HoleIf _ _ env a -> f a <> envToLinks addr env
+
+valLinks addr (VPrim _ _ env) = foldMapWithIndex (\k a -> [ Edge addr a defAttr { label = Just (show k) } ]) env
 
 envToLinks :: Addr -> Env -> Graph Int
 envToLinks addr env = foldMapWithIndex (\k a -> [ Edge addr a defAttr { label = Just k } ]) env
