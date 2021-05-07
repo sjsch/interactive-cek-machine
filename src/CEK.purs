@@ -4,19 +4,17 @@ import Control.Bind ((>>=))
 import Control.Monad.Error.Class (throwError)
 import Control.Monad.Except (Except, runExcept)
 import Control.Monad.State (StateT, get, put, runStateT, modify_)
-import Data.Array (length, snoc)
+import Data.Array (delete, length, snoc)
+import Data.Boolean (otherwise)
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
 import Data.Foldable as DF
-import Data.HashMap (HashMap, empty, insert, lookup, singleton)
+import Data.HashMap (HashMap, empty, insert, lookup, member, singleton, values)
 import Data.Maybe (Maybe(..))
 import Data.Show (class Show, show)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..), snd)
-import Data.Unit (unit)
-import Debug (trace, traceM)
 import Expr (Expr(..), showExprPrec)
-import Partial (crashWith)
 import Partial.Unsafe (unsafeCrashWith)
 import Prelude (Unit, bind, discard, map, pure, unit, (+), (<>), (==))
 
@@ -104,8 +102,9 @@ runStep s = runExcept (map snd (runStateT doStep s))
   where
   doStep = do
     stepCEK
+    garbageCollect
     get
-
+    
 doneCheck :: CEK -> Boolean
 doneCheck (CEK cek) =
   case cek.code of
@@ -130,9 +129,8 @@ stepCEK = do
        v <- lookupEnv cek.env x
        modify_ \(CEK c) -> CEK (c { code = Left v })
     Right (Lit x) -> do
-      -- Skip the expr -> value step for integers?
-      -- alloc (VInt x) >>= plugFrame
       modify_ \(CEK c) -> CEK (c { code = Left (VInt x) })
+      alloc (VInt x) >>= plugFrame
     Right (App f x) -> do
       newcont <- alloc (VCont (HoleFunc x cek.env cek.cont))
       modify_ \(CEK c) -> CEK (c { code = Right f, cont = newcont })
@@ -185,7 +183,33 @@ prims = [ Tuple "add" (VPrim "add" 2 []) ]
 
 type GCState = { roots :: Array Addr, newheap :: Heap, oldheap :: Heap }
 
--- copyLive :: GCState -> GCState
--- copyLive {roots, newheap, oldheap} = foldl copyRoot newheap
---   where
---     copyRoot = ?a
+valRoots :: Value -> Array Addr
+valRoots (VInt _) = []
+valRoots (VClos _ _ env) = values env
+valRoots (VPrim _ _ env) = env
+valRoots (VCont Hole) = []
+valRoots (VCont (HoleArg func cont)) = [func, cont]
+valRoots (VCont (HoleFunc _ env cont)) = snoc (values env) cont
+valRoots (VCont (HoleFuncOnly arg cont)) = [arg, cont]
+
+copyLive :: GCState -> GCState
+copyLive state = foldl copyRoot state state.roots
+  where
+    copyRoot s root
+      | member root s.newheap = s { roots = delete root s.roots }
+      | otherwise =
+        case lookup root s.oldheap of
+          Nothing -> unsafeCrashWith "Address went nowhere"
+          Just val -> s { newheap = insert root val s.newheap, roots = s.roots <> valRoots val }
+
+garbageCollect :: Interp Unit
+garbageCollect = do
+  CEK cek <- get
+  let newheap = go { roots: initialRoots cek, newheap: empty, oldheap: cek.state }
+  put (CEK (cek { state = newheap }))
+  where
+    go s@{roots: []} = s.newheap
+    go s = go (copyLive s)
+
+    initialRoots {code: Left val, env, cont} = valRoots val <> values env <> [cont]
+    initialRoots {env, cont} = values env <> [cont]

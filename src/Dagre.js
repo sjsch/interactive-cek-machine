@@ -40,7 +40,7 @@ exports.renderGraph = function(svg, graph) {
     var inner = el.select("g");
 
     g.graph().transition = function(selection) {
-        return selection.transition().duration(500);
+        return selection.transition().duration(250);
     };
     
     inner.call(render, g);
