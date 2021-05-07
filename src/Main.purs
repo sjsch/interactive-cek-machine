@@ -1,6 +1,7 @@
 module Main where
 
 import CEK (Addr, CEK(..), Env, Frame(..), Value(..), doneCheck, runStep, startState)
+import Control.Category (identity)
 import Control.Monad.Error.Class (throwError)
 import Dagre (Def(..), Graph, CommonAttr, dagre, defAttr)
 import Data.Either (Either(..))
@@ -101,21 +102,24 @@ cekToGraph (CEK cek) =
   <> heapToGraph cek.state
 
   where
-    showCode (Left x) = valToGraph (defAttr { cssClass = Just "ccont" }) (-1) x
+    showCode (Left x) = valToGraph (_ { cssClass = Just "ccont" }) (-1) x
     showCode (Right x) = [ Node (-1) defAttr { label = Just (show x), cssClass = Just "ccont" } ]
 
 heapToGraph :: HashMap Addr Value -> Graph Int
-heapToGraph graph = foldMapWithIndex (valToGraph defAttr) graph
+heapToGraph graph = foldMapWithIndex (valToGraph identity) graph
 
-valToGraph :: CommonAttr -> Addr -> Value -> Graph Int
-valToGraph attr addr val = [ Node addr attr { label = Just (show val) } ] <> valLinks addr val
+valToGraph :: (CommonAttr -> CommonAttr) -> Addr -> Value -> Graph Int
+valToGraph attr addr val = [ Node addr (attr { label: Just (show val), cssClass: cssClass val }) ] <> valLinks addr val
+  where
+    cssClass (VCont _) = Just "cont"
+    cssClass _ = Nothing
 
 valLinks :: Addr -> Value -> Graph Int
 valLinks _ (VInt _) = []
 valLinks addr (VClos _ _ env) =
   envToLinks addr env
 valLinks addr (VCont cont) =
-  let f a = [ Edge addr a defAttr { label = Just "cont" } ]
+  let f a = [ Edge addr a defAttr { label = Just "cont", cssClass = Just "cont" } ]
   in case cont of
     Hole -> []
     HoleArg x a -> f a <> [ Edge addr x defAttr { label = Just "func" } ]

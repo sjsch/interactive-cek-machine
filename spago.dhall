@@ -7,7 +7,6 @@ You can edit this file as you like.
   [ "aff"
   , "arrays"
   , "control"
-  , "debug"
   , "effect"
   , "either"
   , "exceptions"
