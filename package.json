@@ -1,5 +1,5 @@
 {
-    "name": "cek",
+    "name": "cekmachine",
     "version": "1.0.0",
     "description": "",
     "directories": {
@@ -16,12 +16,12 @@
     },
     "scripts": {
         "watch": "spago build --watch",
-        "dev": "parcel dev/index.html",
         "bundle:build": "spago build --purs-args '--codegen corefn'",
         "bundle:dce": "zephyr -f Main.main",
         "bundle:webpack": "webpack",
         "bundle": "npm run bundle:build && npm run bundle:dce && npm run bundle:webpack"
     },
     "author": "Sam Schweigel",
-    "license": "MIT"
+    "license": "MIT",
+    "sideEffects": false
 }
