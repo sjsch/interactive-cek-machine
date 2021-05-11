@@ -53,8 +53,8 @@ runAndLoadCEK :: HTMLElement -> Aff Unit
 runAndLoadCEK el = do
   init <-
     liftEffect do
-      prog <- getAttribute "prog" (HTMLElement.toElement el)
-      step <- getAttribute "step" (HTMLElement.toElement el)
+      prog <- getAttribute "data-prog" (HTMLElement.toElement el)
+      step <- getAttribute "data-step" (HTMLElement.toElement el)
       pure do
         p <- prog
         s <- step
