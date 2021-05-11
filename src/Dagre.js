@@ -45,8 +45,6 @@ exports.renderGraph = function(svg, graph) {
     
     inner.call(render, g);
 
-    const w = parseInt(getComputedStyle(el.node()).width, 10);
-    const  xCenterOffset = (w - g.graph().width) / 2;
-    inner.attr("transform", "translate(" + xCenterOffset + ", 20)");
-    el.attr("height", g.graph().height + 40);
+    el.attr("width", g.graph().width);
+    el.attr("height", g.graph().height);
 }
