@@ -25,6 +25,7 @@ You can edit this file as you like.
   , "unordered-collections"
   , "web-dom"
   , "web-html"
+  , "web-uievents"
   ]
 , packages = ./packages.dhall
 , sources = [ "src/**/*.purs" ]

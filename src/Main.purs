@@ -6,30 +6,35 @@ import Control.Category (identity)
 import Dagre (CommonAttr, Def(..), Graph, dagre, defAttr)
 import Data.Array (mapMaybe)
 import Data.Either (Either(..))
+import Data.Eq ((==))
 import Data.Foldable (traverse_)
 import Data.FoldableWithIndex (foldMapWithIndex)
 import Data.HashMap (HashMap)
+import Data.Int as Int
 import Data.Maybe (Maybe(..), maybe)
 import Effect (Effect)
 import Effect.Aff (Aff)
 import Effect.Class (liftEffect)
 import Expr (parseExpr)
-import Halogen (ClassName(..))
+import Halogen (ClassName(..), RefLabel(..))
 import Halogen as H
 import Halogen.Aff as HA
 import Halogen.HTML as HH
 import Halogen.HTML.Events (onClick)
 import Halogen.HTML.Events as HE
-import Halogen.HTML.Properties (class_, disabled)
+import Halogen.HTML.Properties (class_, disabled, value)
 import Halogen.VDom.Driver (runUI)
 import Prelude (Unit, Void, bind, const, discard, join, not, pure, show, unit, ($), (<>), negate)
 import Type.Proxy (Proxy(..))
+import Web.DOM.Element (getAttribute)
 import Web.DOM.NodeList as NL
 import Web.DOM.ParentNode (QuerySelector(..), querySelectorAll)
-import Web.HTML (window)
+import Web.HTML (HTMLElement, window)
 import Web.HTML.HTMLDocument (toParentNode)
 import Web.HTML.HTMLElement as HTMLElement
+import Web.HTML.HTMLInputElement as HTMLInputElement
 import Web.HTML.Window (document)
+import Web.UIEvent.KeyboardEvent (key)
 
 main :: Effect Unit
 main = do
@@ -41,11 +46,29 @@ main = do
         nodes <- querySelectorAll (QuerySelector ".cek-machine") (toParentNode doc)
         nodesArray <- NL.toArray nodes
         pure $ mapMaybe HTMLElement.fromNode nodesArray
-    traverse_ (runUI component unit) nodes
+    traverse_ (runUI component (Just { prog: "add 1 10", step: 1 })) nodes
+
+runAndLoadCEK :: HTMLElement -> Aff Unit
+runAndLoadCEK el = do
+  init <- liftEffect do
+    prog <- getAttribute "prog" (HTMLElement.toElement el)
+    step <- getAttribute "step" (HTMLElement.toElement el)
+    pure do
+      p <- prog
+      s <- step
+      s' <- Int.fromString s
+      pure { prog: p, step: s'}
+  _ <- runUI component init el
+  pure unit
+
+type InitialCEK
+  = { prog :: String, step :: Int }
 
 data Action
   = ActionProgram String
   | ActionStep
+  | ActionNone
+  | ActionInitialize
 
 type Slots
   = ( graph :: forall q. H.Slot q Void Unit )
@@ -53,26 +76,35 @@ type Slots
 type State
   = { errors :: Maybe String
     , cek :: Maybe CEK
+    , initial :: Maybe InitialCEK
     }
 
 _graph = Proxy :: Proxy "graph"
 
-component :: forall a. H.Component a Unit Void Aff
+component :: forall a. H.Component a (Maybe InitialCEK) Void Aff
 component =
   H.mkComponent
     { initialState
     , render
-    , eval: H.mkEval $ H.defaultEval { handleAction = handleAction }
+    , eval: H.mkEval $ H.defaultEval
+      { handleAction = handleAction
+      , initialize = Just ActionInitialize
+      }
     }
   where
-  initialState _ = { errors: Nothing, cek: Nothing }
+  initialState init = { errors: Nothing, cek: Nothing, initial: init }
 
   render state =
     HH.div_
       $ join
           [ pure
               $ HH.div [ class_ (ClassName "inputbar") ]
-                  [ HH.input [ HE.onValueInput ActionProgram ]
+                  [ HH.input
+                    ([ HE.onValueInput ActionProgram
+                    , HE.onKeyDown (\ke -> if key ke == "Enter" then ActionStep else ActionNone)
+                    ] <> case state.initial of
+                      Just { prog } -> [ value prog ]
+                      Nothing -> [])
                   , HH.button
                       [ onClick (const ActionStep)
                       , disabled (not (validAndNotDone state.cek))
@@ -88,13 +120,14 @@ component =
           ]
 
   handleAction = case _ of
-    ActionProgram "" -> H.put { errors: Nothing, cek: Nothing }
+    ActionProgram "" -> H.put { errors: Nothing, cek: Nothing, initial: Nothing }
     ActionProgram p -> case parseExpr p of
       Left err -> H.modify_ (_ { errors = Just err })
       Right code ->
         H.put
           { errors: Nothing
           , cek: Just (startState code)
+          , initial: Nothing
           }
     ActionStep ->
       H.modify_ \state -> case state.cek of
@@ -105,6 +138,8 @@ component =
           else case runStep cek of
             Left err -> state { errors = Just err }
             Right cek' -> state { cek = Just cek' }
+    ActionInitialize -> pure unit
+    ActionNone -> pure unit
 
   validAndNotDone Nothing = false
 
