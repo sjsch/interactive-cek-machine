@@ -2,7 +2,7 @@ module Main where
 
 import CEK (Addr, CEK(..), Env, Frame(..), Value(..), doneCheck, runStep, startState)
 import Control.Bind ((>>=))
-import Control.Category (identity)
+import Control.Category (identity, (>>>))
 import Dagre (CommonAttr, Def(..), Graph, dagre, defAttr)
 import Data.Array (mapMaybe)
 import Data.Either (Either(..))
@@ -15,16 +15,17 @@ import Data.Maybe (Maybe(..), maybe)
 import Effect (Effect)
 import Effect.Aff (Aff)
 import Effect.Class (liftEffect)
+import Effect.Exception (throw)
 import Expr (parseExpr)
-import Halogen (ClassName(..), RefLabel(..))
+import Halogen (ClassName(..), RefLabel(..), getRef)
 import Halogen as H
 import Halogen.Aff as HA
 import Halogen.HTML as HH
 import Halogen.HTML.Events (onClick)
 import Halogen.HTML.Events as HE
-import Halogen.HTML.Properties (class_, disabled, value)
+import Halogen.HTML.Properties (class_, disabled, ref)
 import Halogen.VDom.Driver (runUI)
-import Prelude (Unit, Void, bind, const, discard, join, not, pure, show, unit, ($), (<>), negate)
+import Prelude (Unit, Void, bind, const, discard, join, negate, not, pure, show, unit, ($), (-), (<>))
 import Type.Proxy (Proxy(..))
 import Web.DOM.Element (getAttribute)
 import Web.DOM.NodeList as NL
@@ -46,7 +47,7 @@ main = do
         nodes <- querySelectorAll (QuerySelector ".cek-machine") (toParentNode doc)
         nodesArray <- NL.toArray nodes
         pure $ mapMaybe HTMLElement.fromNode nodesArray
-    traverse_ (runUI component (Just { prog: "add 1 10", step: 1 })) nodes
+    traverse_ runAndLoadCEK nodes
 
 runAndLoadCEK :: HTMLElement -> Aff Unit
 runAndLoadCEK el = do
@@ -103,13 +104,10 @@ component =
           [ pure
               $ HH.div [ class_ (ClassName "inputbar") ]
                   [ HH.input
-                      ( [ HE.onValueInput ActionProgram
-                        , HE.onKeyDown (\ke -> if key ke == "Enter" then ActionStep else ActionNone)
-                        ]
-                          <> case state.initial of
-                              Just { prog } -> [ value prog ]
-                              Nothing -> []
-                      )
+                    [ HE.onValueInput ActionProgram
+                    , HE.onKeyDown (\ke -> if key ke == "Enter" then ActionStep else ActionNone)
+                    , ref progInputRef
+                    ]
                   , HH.button
                       [ onClick (const ActionStep)
                       , disabled (not (validAndNotDone state.cek))
@@ -143,12 +141,40 @@ component =
           else case runStep cek of
             Left err -> state { errors = Just err }
             Right cek' -> state { cek = Just cek' }
-    ActionInitialize -> pure unit
+    ActionInitialize -> do
+      progInput <- getRef progInputRef
+      { initial } <- H.get
+      case initial of
+        Nothing -> pure unit
+        Just { prog, step } -> do
+          liftEffect do
+            progInput' <- 
+              maybe (throw "Could not find element for input") pure progInput
+              >>= HTMLInputElement.fromElement
+              >>> maybe (throw "Could not find element for input") pure
+            HTMLInputElement.setValue prog progInput'
+          H.put case runCEKSteps prog step of
+            Left err -> { errors: Just err, cek: Nothing, initial: Nothing }
+            Right cek -> { errors: Nothing, cek: Just cek, initial: Nothing }
+          
     ActionNone -> pure unit
 
   validAndNotDone Nothing = false
 
   validAndNotDone (Just s) = not (doneCheck s)
+
+  progInputRef = RefLabel "proginput"
+
+runCEKSteps :: String -> Int -> Either String CEK
+runCEKSteps prog steps = do
+  expr <- parseExpr prog
+  let cek = startState expr
+  go cek steps
+  where
+    go cek 0 = pure cek
+    go cek n = do
+      cek' <- runStep cek
+      go cek' (n - 1)
 
 cekToGraph :: CEK -> Graph Int
 cekToGraph (CEK cek) =
