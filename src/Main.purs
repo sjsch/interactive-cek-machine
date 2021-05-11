@@ -50,14 +50,15 @@ main = do
 
 runAndLoadCEK :: HTMLElement -> Aff Unit
 runAndLoadCEK el = do
-  init <- liftEffect do
-    prog <- getAttribute "prog" (HTMLElement.toElement el)
-    step <- getAttribute "step" (HTMLElement.toElement el)
-    pure do
-      p <- prog
-      s <- step
-      s' <- Int.fromString s
-      pure { prog: p, step: s'}
+  init <-
+    liftEffect do
+      prog <- getAttribute "prog" (HTMLElement.toElement el)
+      step <- getAttribute "step" (HTMLElement.toElement el)
+      pure do
+        p <- prog
+        s <- step
+        s' <- Int.fromString s
+        pure { prog: p, step: s' }
   _ <- runUI component init el
   pure unit
 
@@ -86,10 +87,12 @@ component =
   H.mkComponent
     { initialState
     , render
-    , eval: H.mkEval $ H.defaultEval
-      { handleAction = handleAction
-      , initialize = Just ActionInitialize
-      }
+    , eval:
+        H.mkEval
+          $ H.defaultEval
+              { handleAction = handleAction
+              , initialize = Just ActionInitialize
+              }
     }
   where
   initialState init = { errors: Nothing, cek: Nothing, initial: init }
@@ -100,11 +103,13 @@ component =
           [ pure
               $ HH.div [ class_ (ClassName "inputbar") ]
                   [ HH.input
-                    ([ HE.onValueInput ActionProgram
-                    , HE.onKeyDown (\ke -> if key ke == "Enter" then ActionStep else ActionNone)
-                    ] <> case state.initial of
-                      Just { prog } -> [ value prog ]
-                      Nothing -> [])
+                      ( [ HE.onValueInput ActionProgram
+                        , HE.onKeyDown (\ke -> if key ke == "Enter" then ActionStep else ActionNone)
+                        ]
+                          <> case state.initial of
+                              Just { prog } -> [ value prog ]
+                              Nothing -> []
+                      )
                   , HH.button
                       [ onClick (const ActionStep)
                       , disabled (not (validAndNotDone state.cek))
