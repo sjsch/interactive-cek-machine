@@ -8,7 +8,7 @@ import Data.Array (cons, many, notElem, some)
 import Data.Either (Either(..))
 import Data.Identity (Identity)
 import Data.Int (fromString)
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), isJust, optional)
 import Data.String.CodeUnits (fromCharArray)
 import Text.Parsing.Parser (ParserT, fail, parseErrorMessage, runParser)
 import Text.Parsing.Parser.Combinators (between, try)
@@ -65,10 +65,11 @@ ident = lexeme $ do
 
 literalInt :: Parser Expr
 literalInt = do
+  sign <- optional (symbol "-")
   digits <- some digit
   case fromString (fromCharArray digits) of
     Nothing -> fail "Expected an integer"
-    Just x -> pure (Lit x)
+    Just x -> pure (Lit $ if isJust sign then -x else x)
 
 literalBool :: Parser Expr
 literalBool = (LitB true <$ symbol "true") <|> (LitB false <$ symbol "false")
