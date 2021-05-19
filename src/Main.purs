@@ -104,10 +104,10 @@ component =
           [ pure
               $ HH.div [ class_ (ClassName "inputbar") ]
                   [ HH.input
-                    [ HE.onValueInput ActionProgram
-                    , HE.onKeyDown (\ke -> if key ke == "Enter" then ActionStep else ActionNone)
-                    , ref progInputRef
-                    ]
+                      [ HE.onValueInput ActionProgram
+                      , HE.onKeyDown (\ke -> if key ke == "Enter" then ActionStep else ActionNone)
+                      , ref progInputRef
+                      ]
                   , HH.button
                       [ onClick (const ActionStep)
                       , disabled (not (validAndNotDone state.cek))
@@ -148,15 +148,14 @@ component =
         Nothing -> pure unit
         Just { prog, step } -> do
           liftEffect do
-            progInput' <- 
+            progInput' <-
               maybe (throw "Could not find element for input") pure progInput
-              >>= HTMLInputElement.fromElement
-              >>> maybe (throw "Could not find element for input") pure
+                >>= HTMLInputElement.fromElement
+                >>> maybe (throw "Could not find element for input") pure
             HTMLInputElement.setValue prog progInput'
           H.put case runCEKSteps prog step of
             Left err -> { errors: Just err, cek: Nothing, initial: Nothing }
             Right cek -> { errors: Nothing, cek: Just cek, initial: Nothing }
-          
     ActionNone -> pure unit
 
   validAndNotDone Nothing = false
@@ -168,13 +167,15 @@ component =
 runCEKSteps :: String -> Int -> Either String CEK
 runCEKSteps prog steps = do
   expr <- parseExpr prog
-  let cek = startState expr
+  let
+    cek = startState expr
   go cek steps
   where
-    go cek 0 = pure cek
-    go cek n = do
-      cek' <- runStep cek
-      go cek' (n - 1)
+  go cek 0 = pure cek
+
+  go cek n = do
+    cek' <- runStep cek
+    go cek' (n - 1)
 
 cekToGraph :: CEK -> Graph Int
 cekToGraph (CEK cek) =

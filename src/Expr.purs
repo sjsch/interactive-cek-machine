@@ -24,12 +24,16 @@ data Expr
   | App Expr Expr
   | Abs String Expr
   | CallCC Expr
+  | Let String Expr Expr
 
 parensPrec :: Int -> Int -> String -> String
 parensPrec n m s
   | n > m = "(" <> s <> ")"
   | otherwise = s
 
+-- | Takes a precedence and an expression.  Wraps the printed
+-- | expression in parenthesis if the given precedence is greater then
+-- | the precedence of the enclosed expression.
 showExprPrec :: Int -> Expr -> String
 showExprPrec _ (Var s) = s
 
@@ -44,6 +48,8 @@ showExprPrec p (App f a) = parensPrec p 1 (showExprPrec 1 f <> " " <> showExprPr
 showExprPrec p (Abs v e) = parensPrec p 0 ("λ" <> v <> ". " <> showExprPrec 0 e)
 
 showExprPrec p (CallCC f) = parensPrec p 1 ("call/cc " <> showExprPrec 2 f)
+
+showExprPrec p (Let v b e) = "let " <> v <> " = " <> showExprPrec 0 b <> " in " <> showExprPrec 0 e
 
 instance showExpr :: Show Expr where
   show e = showExprPrec 0 e
@@ -60,7 +66,7 @@ lexeme p = p <* whiteSpace
 ident :: Parser String
 ident = lexeme $ do
   x <- map fromCharArray (cons <$> letter <*> many alphaNum)
-  guard (x `notElem` ["if", "then", "else", "true", "false"])
+  guard (x `notElem` ["if", "then", "else", "true", "false", "call/cc", "let", "in"])
   pure x
 
 literalInt :: Parser Expr
@@ -91,6 +97,14 @@ expr =
           symbol "else"
           f <- p
           pure (If c t f)
+      <|> do
+          symbol "let"
+          v <- ident
+          symbol "="
+          b <- p
+          symbol "in"
+          e <- p
+          pure (Let v b e)
       <|> literalInt
       <|> literalBool
       <|> Abs

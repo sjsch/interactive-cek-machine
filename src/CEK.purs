@@ -148,6 +148,7 @@ stepCEK = do
     Right (If cond t f) -> do
       newcont <- alloc (VCont (HoleIf t f cek.env cek.cont))
       modify_ \(CEK c) -> CEK (c { code = Right cond, cont = newcont })
+    Right (Let var body expr) -> pure unit
 
 plugFrame :: Addr -> Interp Unit
 plugFrame addr = do
@@ -215,13 +216,14 @@ runPrim "snd" _ _ = throwError "'snd' expects a pair argument"
 runPrim _ _ _ = throwError "unknown primitive"
 
 prims :: Array (Tuple String Value)
-prims = [ Tuple "add" (VPrim "add" 2 [])
-        , Tuple "mul" (VPrim "mul" 2 [])
-        , Tuple "eq" (VPrim "eq" 2 [])
-        , Tuple "pair" (VPrim "pair" 2 [])
-        , Tuple "fst" (VPrim "fst" 1 [])
-        , Tuple "snd" (VPrim "snd" 1 [])
-        ]
+prims =
+  [ Tuple "add" (VPrim "add" 2 [])
+  , Tuple "mul" (VPrim "mul" 2 [])
+  , Tuple "eq" (VPrim "eq" 2 [])
+  , Tuple "pair" (VPrim "pair" 2 [])
+  , Tuple "fst" (VPrim "fst" 1 [])
+  , Tuple "snd" (VPrim "snd" 1 [])
+  ]
 
 type GCState
   = { roots :: Array Addr, newheap :: Heap, oldheap :: Heap }
@@ -231,7 +233,7 @@ valRoots (VInt _) = []
 
 valRoots (VBool _) = []
 
-valRoots (VPair l r) = [l, r]
+valRoots (VPair l r) = [ l, r ]
 
 valRoots (VClos _ _ env) = values env
 
