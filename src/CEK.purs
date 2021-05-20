@@ -2,16 +2,17 @@ module CEK where
 
 import Control.Monad.Error.Class (throwError)
 import Control.Monad.Except (Except, runExcept)
-import Control.Monad.RWS (state)
 import Control.Monad.State (StateT, get, put, runStateT, modify_)
-import Data.Array (delete, length, snoc)
+import Data.Array (length, snoc)
+import Data.Array as A
 import Data.Boolean (otherwise)
 import Data.CommutativeRing ((*))
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
 import Data.Foldable as DF
-import Data.HashMap (HashMap, empty, insert, lookup, member, singleton, values)
-import Data.Maybe (Maybe(..))
+import Data.HashMap (HashMap, empty, insert, lookup, member, singleton)
+import Data.HashMap as HM
+import Data.Maybe (Maybe(..), maybe)
 import Data.Show (class Show, show)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..), snd)
@@ -49,7 +50,7 @@ data Frame
   | HoleArg Addr Addr -- value □
   | HoleFuncOnly Addr Addr -- □ value
   | HoleIf Expr Expr Env Addr -- if □ then expr else expr
-  | HoleLet Addr Expr Addr -- let v = □ in expr
+  | HoleLet Env Addr Expr Addr -- let v = □ in expr
 
 instance showFrame :: Show Frame where
   show Hole = "□"
@@ -57,7 +58,7 @@ instance showFrame :: Show Frame where
   show (HoleFuncOnly func _) = "□ arg"
   show (HoleArg func _) = "func □"
   show (HoleIf t f _ _) = "if □ then " <> showExprPrec 0 t <> " else " <> showExprPrec 0 f
-  show (HoleLet _ body _) = "let var = □ in " <> showExprPrec 0 body
+  show (HoleLet _ _ body _) = "let var = □ in " <> showExprPrec 0 body
 
 type Heap
   = HashMap Addr Value
@@ -155,8 +156,9 @@ stepCEK = do
       modify_ \(CEK c) -> CEK (c { code = Right cond, cont = newcont })
     Right (Let var body expr) -> do
       v <- alloc VUndef
-      newcont <- alloc (VCont (HoleLet v expr cek.cont))
-      modify_ \(CEK c) -> CEK (c { code = Right body, env = insert var v cek.env, cont = newcont })
+      let env' = insert var v cek.env
+      newcont <- alloc (VCont (HoleLet env' v expr cek.cont))
+      modify_ \(CEK c) -> CEK (c { code = Right body, env = env', cont = newcont })
 
 plugFrame :: Addr -> Interp Unit
 plugFrame addr = do
@@ -177,9 +179,9 @@ plugFrame addr = do
           x = if b then t else f
         modify_ \(CEK c) -> CEK (c { code = Right x, env = env, cont = cont })
       Just _ -> throwError "Tried to use if on a non-boolean"
-    Just (VCont (HoleLet v expr cont)) -> do
+    Just (VCont (HoleLet env v expr cont)) -> do
       val <- lookupAddr addr
-      modify_ \(CEK c) -> CEK (c { code = Right expr, state = insert v val cek.state, cont = cont })
+      modify_ \(CEK c) -> CEK (c { code = Right expr, state = insert v val cek.state, cont = cont, env = env })
     Just x -> unsafeCrashWith ("Not a continuation " <> show x)
 
 applyFunc :: Addr -> Addr -> Addr -> Interp Unit
@@ -239,6 +241,21 @@ prims =
 type GCState
   = { roots :: Array Addr, newheap :: Heap, oldheap :: Heap }
 
+exprRoots :: Env -> Expr -> Array (Tuple String Addr)
+exprRoots env (Var v) = maybe [] (\x -> [Tuple v x]) (lookup v env)
+exprRoots _ (Lit _) = []
+exprRoots _ (LitB _) = []
+exprRoots env (If t f e) = exprRoots env t <> exprRoots env f <> exprRoots env e
+exprRoots env (App f a) = exprRoots env f <> exprRoots env a
+exprRoots env (Abs v a) = exprRoots (HM.delete v env) a
+exprRoots env (CallCC e) = exprRoots env e
+exprRoots env (Let v b e) =
+  let env' = HM.delete v env
+  in exprRoots env' b <> exprRoots env' e
+
+exprRoots' :: Env -> Expr -> Array Addr
+exprRoots' env expr = map snd (exprRoots env expr)
+
 valRoots :: Value -> Array Addr
 valRoots (VInt _) = []
 
@@ -246,29 +263,29 @@ valRoots (VBool _) = []
 
 valRoots (VPair l r) = [ l, r ]
 
-valRoots (VClos _ _ env) = values env
+valRoots (VClos v expr env) = exprRoots' env (Abs v expr)
 
 valRoots (VPrim _ _ env) = env
 
-valRoots (VUndef) = []
+valRoots VUndef = []
 
 valRoots (VCont Hole) = []
 
 valRoots (VCont (HoleArg func cont)) = [ func, cont ]
 
-valRoots (VCont (HoleFunc _ env cont)) = snoc (values env) cont
+valRoots (VCont (HoleFunc expr env cont)) = snoc (exprRoots' env expr) cont
 
 valRoots (VCont (HoleFuncOnly arg cont)) = [ arg, cont ]
 
-valRoots (VCont (HoleIf _ _ env cont)) = snoc (values env) cont
+valRoots (VCont (HoleIf t f env cont)) = snoc (exprRoots' env t <> exprRoots' env f) cont
 
-valRoots (VCont (HoleLet _ expr cont)) = [ cont ]
+valRoots (VCont (HoleLet env v expr cont)) = exprRoots' env expr <> [ v, cont ]
 
 copyLive :: GCState -> GCState
 copyLive state = foldl copyRoot state state.roots
   where
   copyRoot s root
-    | member root s.newheap = s { roots = delete root s.roots }
+    | member root s.newheap = s { roots = A.delete root s.roots }
     | otherwise = case lookup root s.oldheap of
       Nothing -> unsafeCrashWith "Address went nowhere"
       Just val -> s { newheap = insert root val s.newheap, roots = s.roots <> valRoots val }
@@ -286,4 +303,4 @@ garbageCollect = do
 
   initialRoots { code: Left addr, cont } = [ addr, cont ]
 
-  initialRoots { env, cont } = values env <> [ cont ]
+  initialRoots { code: Right expr, env, cont } = exprRoots' env expr <> [ cont ]

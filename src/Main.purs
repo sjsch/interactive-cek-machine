@@ -1,10 +1,10 @@
 module Main where
 
-import CEK (Addr, CEK(..), Env, Frame(..), Value(..), doneCheck, runStep, startState)
+import CEK (Addr, CEK(..), Env, Frame(..), Value(..), doneCheck, exprRoots, runStep, startState)
 import Control.Bind ((>>=))
 import Control.Category (identity, (>>>))
 import Dagre (CommonAttr, Def(..), Graph, dagre, defAttr)
-import Data.Array (mapMaybe)
+import Data.Array (foldMap, mapMaybe)
 import Data.Either (Either(..))
 import Data.Eq ((==))
 import Data.Foldable (traverse_)
@@ -12,11 +12,12 @@ import Data.FoldableWithIndex (foldMapWithIndex)
 import Data.HashMap (HashMap)
 import Data.Int as Int
 import Data.Maybe (Maybe(..), maybe)
+import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff (Aff)
 import Effect.Class (liftEffect)
 import Effect.Exception (throw)
-import Expr (parseExpr)
+import Expr (Expr(..), parseExpr)
 import Halogen (ClassName(..), RefLabel(..), getRef)
 import Halogen as H
 import Halogen.Aff as HA
@@ -190,7 +191,7 @@ cekToGraph (CEK cek) =
 
   showCode (Right x) =
     [ Node (-1) defAttr { label = Just (show x), cssClass = Just "ccont" } ]
-      <> envToLinks (-1) cek.env
+      <> exprToLinks (-1) x cek.env
 
 heapToGraph :: HashMap Addr Value -> Graph Int
 heapToGraph graph = foldMapWithIndex (valToGraph identity) graph
@@ -214,7 +215,7 @@ valLinks a (VPair l r) =
   , Edge a r defAttr { label = Just "r" }
   ]
 
-valLinks addr (VClos _ _ env) = envToLinks addr env
+valLinks addr (VClos v expr env) = exprToLinks addr (Abs v expr) env
 
 valLinks addr (VCont cont) =
   let
@@ -223,12 +224,13 @@ valLinks addr (VCont cont) =
     case cont of
       Hole -> []
       HoleArg x a -> f a <> [ Edge addr x defAttr { label = Just "func" } ]
-      HoleFunc _ env a -> f a <> envToLinks addr env
+      HoleFunc expr env a -> f a <> exprToLinks addr expr env
       HoleFuncOnly x a -> f a <> [ Edge addr x defAttr { label = Just "arg" } ]
-      HoleIf _ _ env a -> f a <> envToLinks addr env
-      HoleLet _ _ a -> f a
+      HoleIf et ef env a -> f a <> exprToLinks addr et env <> exprToLinks addr ef env
+      HoleLet env v expr a -> f a <> exprToLinks addr expr env
 
 valLinks addr (VPrim _ _ env) = foldMapWithIndex (\k a -> [ Edge addr a defAttr { label = Just (show k) } ]) env
 
-envToLinks :: Addr -> Env -> Graph Int
-envToLinks addr env = foldMapWithIndex (\k a -> [ Edge addr a defAttr { label = Just k } ]) env
+exprToLinks :: Addr -> Expr -> Env -> Graph Int
+exprToLinks addr expr env = foldMap (\(Tuple k a) -> [ Edge addr a defAttr { label = Just k } ])
+                            (exprRoots env expr)
