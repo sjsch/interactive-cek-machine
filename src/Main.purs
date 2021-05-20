@@ -207,6 +207,8 @@ valLinks _ (VInt _) = []
 
 valLinks _ (VBool _) = []
 
+valLinks _ VUndef = []
+
 valLinks a (VPair l r) =
   [ Edge a l defAttr { label = Just "l" }
   , Edge a r defAttr { label = Just "r" }
@@ -224,6 +226,7 @@ valLinks addr (VCont cont) =
       HoleFunc _ env a -> f a <> envToLinks addr env
       HoleFuncOnly x a -> f a <> [ Edge addr x defAttr { label = Just "arg" } ]
       HoleIf _ _ env a -> f a <> envToLinks addr env
+      HoleLet _ _ a -> f a
 
 valLinks addr (VPrim _ _ env) = foldMapWithIndex (\k a -> [ Edge addr a defAttr { label = Just (show k) } ]) env
 

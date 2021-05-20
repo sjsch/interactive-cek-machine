@@ -2,6 +2,7 @@ module CEK where
 
 import Control.Monad.Error.Class (throwError)
 import Control.Monad.Except (Except, runExcept)
+import Control.Monad.RWS (state)
 import Control.Monad.State (StateT, get, put, runStateT, modify_)
 import Data.Array (delete, length, snoc)
 import Data.Boolean (otherwise)
@@ -31,6 +32,7 @@ data Value
   | VPrim String Int (Array Addr)
   | VCont Frame
   | VPair Addr Addr
+  | VUndef
 
 instance showValue :: Show Value where
   show (VInt n) = show n
@@ -39,6 +41,7 @@ instance showValue :: Show Value where
   show (VPrim name _ env) = "#" <> name
   show (VCont cont) = show cont
   show (VPair l r) = "pair l r"
+  show VUndef = "undefined"
 
 data Frame
   = Hole -- □
@@ -46,6 +49,7 @@ data Frame
   | HoleArg Addr Addr -- value □
   | HoleFuncOnly Addr Addr -- □ value
   | HoleIf Expr Expr Env Addr -- if □ then expr else expr
+  | HoleLet Addr Expr Addr -- let v = □ in expr
 
 instance showFrame :: Show Frame where
   show Hole = "□"
@@ -53,6 +57,7 @@ instance showFrame :: Show Frame where
   show (HoleFuncOnly func _) = "□ arg"
   show (HoleArg func _) = "func □"
   show (HoleIf t f _ _) = "if □ then " <> showExprPrec 0 t <> " else " <> showExprPrec 0 f
+  show (HoleLet _ body _) = "let var = □ in " <> showExprPrec 0 body
 
 type Heap
   = HashMap Addr Value
@@ -148,7 +153,10 @@ stepCEK = do
     Right (If cond t f) -> do
       newcont <- alloc (VCont (HoleIf t f cek.env cek.cont))
       modify_ \(CEK c) -> CEK (c { code = Right cond, cont = newcont })
-    Right (Let var body expr) -> pure unit
+    Right (Let var body expr) -> do
+      v <- alloc VUndef
+      newcont <- alloc (VCont (HoleLet v expr cek.cont))
+      modify_ \(CEK c) -> CEK (c { code = Right body, env = insert var v cek.env, cont = newcont })
 
 plugFrame :: Addr -> Interp Unit
 plugFrame addr = do
@@ -169,7 +177,10 @@ plugFrame addr = do
           x = if b then t else f
         modify_ \(CEK c) -> CEK (c { code = Right x, env = env, cont = cont })
       Just _ -> throwError "Tried to use if on a non-boolean"
-    Just x -> unsafeCrashWith ("Not a continuation" <> show x)
+    Just (VCont (HoleLet v expr cont)) -> do
+      val <- lookupAddr addr
+      modify_ \(CEK c) -> CEK (c { code = Right expr, state = insert v val cek.state, cont = cont })
+    Just x -> unsafeCrashWith ("Not a continuation " <> show x)
 
 applyFunc :: Addr -> Addr -> Addr -> Interp Unit
 applyFunc addr funcAddr cont = do
@@ -239,6 +250,8 @@ valRoots (VClos _ _ env) = values env
 
 valRoots (VPrim _ _ env) = env
 
+valRoots (VUndef) = []
+
 valRoots (VCont Hole) = []
 
 valRoots (VCont (HoleArg func cont)) = [ func, cont ]
@@ -248,6 +261,8 @@ valRoots (VCont (HoleFunc _ env cont)) = snoc (values env) cont
 valRoots (VCont (HoleFuncOnly arg cont)) = [ arg, cont ]
 
 valRoots (VCont (HoleIf _ _ env cont)) = snoc (values env) cont
+
+valRoots (VCont (HoleLet _ expr cont)) = [ cont ]
 
 copyLive :: GCState -> GCState
 copyLive state = foldl copyRoot state state.roots
