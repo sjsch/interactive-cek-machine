@@ -279,7 +279,7 @@ valRoots (VCont (HoleFuncOnly arg cont)) = [ arg, cont ]
 
 valRoots (VCont (HoleIf t f env cont)) = snoc (exprRoots' env t <> exprRoots' env f) cont
 
-valRoots (VCont (HoleLet env v expr cont)) = exprRoots' env expr <> [ v, cont ]
+valRoots (VCont (HoleLet env v expr cont)) = snoc (exprRoots' env expr) cont 
 
 copyLive :: GCState -> GCState
 copyLive state = foldl copyRoot state state.roots
